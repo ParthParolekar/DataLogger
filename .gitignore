@@ -1,0 +1,20 @@
+# Build outputs
+Debug
+Release
+.o
+.elf
+.bin
+.hex
+.map
+.list
+.su
+
+# IDE settings (optional - some people include these)
+.settings
+
+# Workspace metadata
+.metadata
+
+# Other generated files
+.d
+.launch
