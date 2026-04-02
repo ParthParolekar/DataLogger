@@ -24,6 +24,7 @@
 #include "DHT11.h"
 #include "utils.h"
 #include "HCSR04.h"
+#include "ring_buffer.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -122,6 +123,12 @@ int main(void)
   HCSR04_Data_t hcsr04_data;
   HCSR04_Status_t hcsr04_status;
 
+  uint32_t last_hcsr04_tick = 0;
+  uint32_t last_dht11_tick = 0;
+  uint16_t last_distance = 0;
+  RingBuffer_t rb;
+  RingBuffer_Init(&rb);
+
   char uart_buf[64];
 
   __HAL_TIM_SET_COUNTER(&htim14, 0);
@@ -136,6 +143,53 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
+	  uint32_t now = HAL_GetTick();
+
+	  //HCSR04 Data - Read Every 500ms
+	  if(now - last_hcsr04_tick >= 500){
+
+		  last_hcsr04_tick = now;
+
+		  hcsr04_status = HCSR04_Read(&hcsr04_data);
+
+		  if(hcsr04_status == HCSR04_OK){
+			  last_distance = hcsr04_data.distance_cm;
+		  }else{
+			  snprintf(uart_buf, sizeof(uart_buf), "HCSR04 Err: %d\r\n", hcsr04_status);
+			  UART_Print(uart_buf);
+		  }
+	  }
+
+	  if(now - last_dht11_tick >= 2000){
+
+		  last_dht11_tick = now;
+
+		  dht_status = DHT11_ReadData(&dht_data);
+
+		  if(dht_status == DHT11_OK){
+
+			  DataPoint_t dp = {
+					  .distance = last_distance,
+					  .temperature = dht_data.temperature,
+					  .humidity = dht_data.humidity,
+					  .timestamp = now
+			  };
+
+			  RingBuffer_Write(&rb, &dp);
+
+			  snprintf(uart_buf, sizeof(uart_buf), "T: %dC, H: %d %%, D: %dcm, @ %lu ms \r\n",
+					  dp.temperature, dp.humidity, dp.distance, dp.timestamp);
+			  UART_Print(uart_buf);
+
+		  }else{
+			  snprintf(uart_buf, sizeof(uart_buf), "DHT11 Err: %d\r\n", dht_status);
+			  UART_Print(uart_buf);
+		  }
+
+
+	  }
+
+#if 0
 	  //DHT11 READING
 	  dht_status = DHT11_ReadData(&dht_data);
 
@@ -170,6 +224,7 @@ int main(void)
 	  }
 
 	  HAL_Delay(2000);
+#endif
   }
   /* USER CODE END 3 */
 }
