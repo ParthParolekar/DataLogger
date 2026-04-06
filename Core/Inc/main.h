@@ -67,6 +67,7 @@ void Error_Handler(void);
 #define BUZZER_GPIO_Port GPIOB
 #define IR_INPUT_Pin GPIO_PIN_8
 #define IR_INPUT_GPIO_Port GPIOA
+#define IR_INPUT_EXTI_IRQn EXTI4_15_IRQn
 
 /* USER CODE BEGIN Private defines */
 

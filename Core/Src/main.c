@@ -25,6 +25,7 @@
 #include "utils.h"
 #include "HCSR04.h"
 #include "ring_buffer.h"
+#include "ir_remote.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -76,6 +77,7 @@ void UART_Print(char *msg){
 	HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
+
 /* USER CODE END 0 */
 
 /**
@@ -116,12 +118,15 @@ int main(void)
   utils_init(&htim14);
   DHT11_Init();
   HCSR04_Init(&htim16);
+  IR_Init(&htim17);
 
   DHT11_Data_t dht_data;
   DHT11_Status_t dht_status;
 
   HCSR04_Data_t hcsr04_data;
   HCSR04_Status_t hcsr04_status;
+
+  IR_Data_t ir_data;
 
   uint32_t last_hcsr04_tick = 0;
   uint32_t last_dht11_tick = 0;
@@ -133,15 +138,23 @@ int main(void)
 
   __HAL_TIM_SET_COUNTER(&htim14, 0);
   delay_us(100);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+
+	  if(IR_Get_Command(&ir_data)){
+		  snprintf(uart_buf, sizeof(uart_buf), "IR Command: 0x%02X\r\n", ir_data.command);
+		  UART_Print(uart_buf);
+	  }
 
 	  uint32_t now = HAL_GetTick();
 
@@ -188,43 +201,6 @@ int main(void)
 
 
 	  }
-
-#if 0
-	  //DHT11 READING
-	  dht_status = DHT11_ReadData(&dht_data);
-
-	  if(dht_status == DHT11_OK){
-
-		  snprintf(uart_buf, sizeof(uart_buf),
-				  "Temperature: %d C, Humidity: %d %%\r\n",
-				  dht_data.temperature,
-				  dht_data.humidity);
-
-		  UART_Print(uart_buf);
-	  }else{
-
-		  snprintf(uart_buf, sizeof(uart_buf),
-				  "DHT11_ERR: %d\r\n", dht_status);
-
-		  UART_Print(uart_buf);
-	  }
-
-	  //HCSR04 READING
-	  hcsr04_status = HCSR04_Read(&hcsr04_data);
-
-	  if(hcsr04_status == HCSR04_OK){
-
-		  snprintf(uart_buf, sizeof(uart_buf), "Distance: %d cm\r\n", hcsr04_data.distance_cm);
-
-		  UART_Print(uart_buf);
-	  }else{
-		  snprintf(uart_buf, sizeof(uart_buf), "HCSR04 Err: %d\r\n", hcsr04_status);
-
-		  UART_Print(uart_buf);
-	  }
-
-	  HAL_Delay(2000);
-#endif
   }
   /* USER CODE END 3 */
 }
@@ -516,9 +492,13 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : IR_INPUT_Pin */
   GPIO_InitStruct.Pin = IR_INPUT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(IR_INPUT_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -526,6 +506,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
+	  if(GPIO_Pin == IR_INPUT_Pin){
+		  IR_EXTI_Callback();
+	  }
+}
 
 /* USER CODE END 4 */
 
