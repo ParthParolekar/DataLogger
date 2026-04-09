@@ -55,7 +55,9 @@ TIM_HandleTypeDef htim17;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+static SystemMode_t current_mode = MODE_LIVE;
+static uint8_t playback_index = 0;
+static RingBuffer_t rb;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -77,6 +79,69 @@ void UART_Print(char *msg){
 	HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
+void Handle_IR_Command(IR_Data_t *ir_data){
+	switch(ir_data->command){
+		case 0x0C:	//1 Live Mode
+			playback_index = 0;
+			current_mode = MODE_LIVE;
+			UART_Print("Mode: LIVE\r\n");
+			break;
+
+		case 0x18:	//2 Playback Mode
+			playback_index = 0;
+			current_mode = MODE_PLAYBACK;
+			UART_Print("Mode: PLAYBACK\r\n");
+			break;
+
+		case 0x5E:	//3 Alert Config Mode
+			current_mode = MODE_ALERT_CONFIG;
+			UART_Print("Mode: ALERT CONFIG\r\n");
+			break;
+
+		case 0x16:	//0 Home
+			playback_index = 0;
+			current_mode = MODE_LIVE;
+			UART_Print("Mode: LIVE\r\n");
+			break;
+
+		case 0x47:	//CH+ Next Entry In Playback
+			if(current_mode == MODE_PLAYBACK){
+				if(playback_index < RingBuffer_GetCount(&rb) - 1){
+					playback_index++;
+					//TODO: Display Entry On LCD
+				}
+			}
+			break;
+
+		case 0x45:	//CH- Previous Entry In Playback
+			if(current_mode == MODE_PLAYBACK){
+				if(playback_index > 0){
+					playback_index--;
+					//TODO: Display Entry On LCD
+				}
+			}
+			break;
+
+		case 0x15:	//Vol+ Increase Threshold
+			if(current_mode == MODE_ALERT_CONFIG){
+				//TODO Increase Alert Threshold
+			}
+			break;
+
+		case 0x07:	//Vol- Decrease Threshold
+			if(current_mode == MODE_ALERT_CONFIG){
+				//TODO Increase Alert Threshold
+			}
+			break;
+
+		case 0x43:	//Play/Pause - Confirm
+			//TODO Confirm Alert Threshold
+			break;
+
+		default:
+			break;
+	}
+}
 
 /* USER CODE END 0 */
 
@@ -131,7 +196,7 @@ int main(void)
   uint32_t last_hcsr04_tick = 0;
   uint32_t last_dht11_tick = 0;
   uint16_t last_distance = 0;
-  RingBuffer_t rb;
+//  RingBuffer_t rb;
   RingBuffer_Init(&rb);
 
   char uart_buf[64];
@@ -152,6 +217,7 @@ int main(void)
 
 
 	  if(IR_Get_Command(&ir_data)){
+		  Handle_IR_Command(&ir_data);
 		  snprintf(uart_buf, sizeof(uart_buf), "IR Command: 0x%02X\r\n", ir_data.command);
 		  UART_Print(uart_buf);
 	  }

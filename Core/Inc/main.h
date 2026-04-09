@@ -70,7 +70,11 @@ void Error_Handler(void);
 #define IR_INPUT_EXTI_IRQn EXTI4_15_IRQn
 
 /* USER CODE BEGIN Private defines */
-
+typedef enum{
+	MODE_LIVE = 0,
+	MODE_PLAYBACK,
+	MODE_ALERT_CONFIG
+} SystemMode_t;
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
