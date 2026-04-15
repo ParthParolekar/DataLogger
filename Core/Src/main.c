@@ -26,6 +26,7 @@
 #include "HCSR04.h"
 #include "ring_buffer.h"
 #include "ir_remote.h"
+#include "lcd.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -58,6 +59,8 @@ UART_HandleTypeDef huart2;
 static SystemMode_t current_mode = MODE_LIVE;
 static uint8_t playback_index = 0;
 static RingBuffer_t rb;
+static uint16_t distance_threshold = 20;
+static uint16_t temp_distance_threshold = 20;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -80,6 +83,12 @@ void UART_Print(char *msg){
 }
 
 void Handle_IR_Command(IR_Data_t *ir_data){
+	DataPoint_t display_data;
+	char display_buf[64];
+	uint16_t min_distance_threshold = 2;
+	uint16_t max_distance_threshold = 400;
+	uint8_t data_retrieved;
+
 	switch(ir_data->command){
 		case 0x0C:	//1 Live Mode
 			playback_index = 0;
@@ -91,11 +100,43 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 			playback_index = 0;
 			current_mode = MODE_PLAYBACK;
 			UART_Print("Mode: PLAYBACK\r\n");
+			LCD_Clear();
+			LCD_Print("Mode: PLAYBACK");
+
+			HAL_Delay(750);
+			data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
+			if(data_retrieved){
+				LCD_Clear();
+				snprintf(display_buf, sizeof(display_buf), "[%d], T:%dC, H:%d%%",
+						playback_index, display_data.temperature, display_data.humidity);
+				LCD_Print(display_buf);
+
+				LCD_SetCursor(1, 0);
+
+				snprintf(display_buf, sizeof(display_buf), "D:%dcm, @%lus",
+						display_data.distance, display_data.timestamp/1000);
+				LCD_Print(display_buf);
+			}
+
 			break;
 
 		case 0x5E:	//3 Alert Config Mode
 			current_mode = MODE_ALERT_CONFIG;
+			temp_distance_threshold = distance_threshold;
 			UART_Print("Mode: ALERT CONFIG\r\n");
+
+			LCD_Clear();
+			LCD_Print("Mode:");
+			LCD_SetCursor(1, 0);
+			LCD_Print("ALERT_CONFIG");
+
+			HAL_Delay(500);
+
+			LCD_Clear();
+			LCD_Print("Dist Threshold");
+			LCD_SetCursor(1, 0);
+			snprintf(display_buf, sizeof(display_buf), "%d", distance_threshold);
+			LCD_Print(display_buf);
 			break;
 
 		case 0x16:	//0 Home
@@ -106,36 +147,87 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 
 		case 0x47:	//CH+ Next Entry In Playback
 			if(current_mode == MODE_PLAYBACK){
-				if(playback_index < RingBuffer_GetCount(&rb) - 1){
+
+//				if(playback_index < RingBuffer_GetCount(&rb) - 1){
+				if(playback_index >= RingBuffer_GetCount(&rb) - 1){
+					playback_index = 0;
+				}else{
 					playback_index++;
-					//TODO: Display Entry On LCD
 				}
+
+				//TODO: Display Entry On LCD
+				data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
+				if(data_retrieved){
+					LCD_Clear();
+					snprintf(display_buf, sizeof(display_buf), "[%d], T:%dC, H:%d%%",
+							playback_index, display_data.temperature, display_data.humidity);
+					LCD_Print(display_buf);
+
+					LCD_SetCursor(1, 0);
+
+					snprintf(display_buf, sizeof(display_buf), "D:%dcm, @%lus",
+							display_data.distance, display_data.timestamp/1000);
+					LCD_Print(display_buf);
+					}
+//				}
 			}
 			break;
 
 		case 0x45:	//CH- Previous Entry In Playback
 			if(current_mode == MODE_PLAYBACK){
-				if(playback_index > 0){
-					playback_index--;
-					//TODO: Display Entry On LCD
+
+//				if(playback_index > 0){
+				if(playback_index  <= 0){
+					playback_index = RingBuffer_GetCount(&rb) - 1;
+				}else{
+				playback_index--;
 				}
+				//TODO: Display Entry On LCD
+				data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
+				if(data_retrieved){
+					LCD_Clear();
+					snprintf(display_buf, sizeof(display_buf), "[%d], T:%dC, H:%d%%",
+							playback_index, display_data.temperature, display_data.humidity);
+					LCD_Print(display_buf);
+
+					LCD_SetCursor(1, 0);
+
+					snprintf(display_buf, sizeof(display_buf), "D:%dcm, @%lus",
+							display_data.distance, display_data.timestamp/1000);
+					LCD_Print(display_buf);
+					}
+//				}
 			}
 			break;
 
 		case 0x15:	//Vol+ Increase Threshold
 			if(current_mode == MODE_ALERT_CONFIG){
 				//TODO Increase Alert Threshold
+				if(temp_distance_threshold < max_distance_threshold){
+					temp_distance_threshold++;
+					LCD_SetCursor(1, 0);
+					snprintf(display_buf, sizeof(display_buf), "%d", temp_distance_threshold);
+					LCD_Print(display_buf);
+				}
 			}
 			break;
 
 		case 0x07:	//Vol- Decrease Threshold
 			if(current_mode == MODE_ALERT_CONFIG){
 				//TODO Increase Alert Threshold
+				if(temp_distance_threshold > min_distance_threshold){
+					temp_distance_threshold--;
+					LCD_SetCursor(1, 0);
+					snprintf(display_buf, sizeof(display_buf), "%d", temp_distance_threshold);
+					LCD_Print(display_buf);
+				}
 			}
 			break;
 
 		case 0x43:	//Play/Pause - Confirm
 			//TODO Confirm Alert Threshold
+			distance_threshold = temp_distance_threshold;
+			current_mode = MODE_LIVE;
 			break;
 
 		default:
@@ -200,9 +292,15 @@ int main(void)
   RingBuffer_Init(&rb);
 
   char uart_buf[64];
-
+  char lcd_buf[64];
   __HAL_TIM_SET_COUNTER(&htim14, 0);
   delay_us(100);
+
+  HAL_Delay(500);
+  LCD_Init(&hi2c1);
+  LCD_Print("Data Logger Ready");
+  LCD_SetCursor(1, 0);
+  LCD_Print("Waiting...");
 
   /* USER CODE END 2 */
 
@@ -218,9 +316,10 @@ int main(void)
 
 	  if(IR_Get_Command(&ir_data)){
 		  Handle_IR_Command(&ir_data);
-		  snprintf(uart_buf, sizeof(uart_buf), "IR Command: 0x%02X\r\n", ir_data.command);
-		  UART_Print(uart_buf);
 	  }
+
+	  if(current_mode == MODE_LIVE){
+
 
 	  uint32_t now = HAL_GetTick();
 
@@ -254,11 +353,24 @@ int main(void)
 					  .timestamp = now
 			  };
 
+			  if(last_distance < distance_threshold){
+				  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+			  }else{
+				  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+			  }
+
 			  RingBuffer_Write(&rb, &dp);
 
 			  snprintf(uart_buf, sizeof(uart_buf), "T: %dC, H: %d %%, D: %dcm, @ %lu ms \r\n",
 					  dp.temperature, dp.humidity, dp.distance, dp.timestamp);
 			  UART_Print(uart_buf);
+
+				  LCD_Clear();
+				  snprintf(lcd_buf, sizeof(lcd_buf), "T:%dC H:%d%%",dp.temperature, dp.humidity);
+				  LCD_Print(lcd_buf);
+				  LCD_SetCursor(1, 0);
+				  snprintf(lcd_buf, sizeof(lcd_buf), "D:%dcm @%lus",dp.distance, dp.timestamp/1000);
+				  LCD_Print(lcd_buf);
 
 		  }else{
 			  snprintf(uart_buf, sizeof(uart_buf), "DHT11 Err: %d\r\n", dht_status);
@@ -266,6 +378,7 @@ int main(void)
 		  }
 
 
+	  }
 	  }
   }
   /* USER CODE END 3 */
