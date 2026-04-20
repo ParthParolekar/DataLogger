@@ -96,11 +96,13 @@ The system operates as a state machine with three modes, switchable via IR remot
 │  MODE_LIVE  │                             │ MODE_PLAYBACK│
 │             │ ──────── Button 2 ────────► │             │
 └──────┬──────┘                             └─────────────┘
-       │                                          ▲
-       │ Button 3                                 │ Play/Pause (confirm)
-       ▼                                          │
-┌─────────────────┐                               │
-│ MODE_ALERT_     │ ────────────────────────────► │
+       │  ▲
+       │  │ Play/Pause (confirm)
+       │  │
+       │ Button 3
+       ▼  │
+┌─────────────────┐
+│ MODE_ALERT_     │
 │ CONFIG          │
 └─────────────────┘
 ```
