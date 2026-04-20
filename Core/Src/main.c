@@ -130,7 +130,7 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 			LCD_SetCursor(1, 0);
 			LCD_Print("ALERT_CONFIG");
 
-			HAL_Delay(500);
+			HAL_Delay(750);
 
 			LCD_Clear();
 			LCD_Print("Dist Threshold");
@@ -148,14 +148,12 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 		case 0x47:	//CH+ Next Entry In Playback
 			if(current_mode == MODE_PLAYBACK){
 
-//				if(playback_index < RingBuffer_GetCount(&rb) - 1){
 				if(playback_index >= RingBuffer_GetCount(&rb) - 1){
 					playback_index = 0;
 				}else{
 					playback_index++;
 				}
 
-				//TODO: Display Entry On LCD
 				data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
 				if(data_retrieved){
 					LCD_Clear();
@@ -169,20 +167,18 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 							display_data.distance, display_data.timestamp/1000);
 					LCD_Print(display_buf);
 					}
-//				}
 			}
 			break;
 
 		case 0x45:	//CH- Previous Entry In Playback
 			if(current_mode == MODE_PLAYBACK){
 
-//				if(playback_index > 0){
-				if(playback_index  <= 0){
+				if(playback_index  == 0){
 					playback_index = RingBuffer_GetCount(&rb) - 1;
 				}else{
 				playback_index--;
 				}
-				//TODO: Display Entry On LCD
+
 				data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
 				if(data_retrieved){
 					LCD_Clear();
@@ -196,17 +192,15 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 							display_data.distance, display_data.timestamp/1000);
 					LCD_Print(display_buf);
 					}
-//				}
 			}
 			break;
 
 		case 0x15:	//Vol+ Increase Threshold
 			if(current_mode == MODE_ALERT_CONFIG){
-				//TODO Increase Alert Threshold
 				if(temp_distance_threshold < max_distance_threshold){
 					temp_distance_threshold++;
 					LCD_SetCursor(1, 0);
-					snprintf(display_buf, sizeof(display_buf), "%d", temp_distance_threshold);
+					snprintf(display_buf, sizeof(display_buf), "%-4d", temp_distance_threshold);
 					LCD_Print(display_buf);
 				}
 			}
@@ -214,20 +208,20 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 
 		case 0x07:	//Vol- Decrease Threshold
 			if(current_mode == MODE_ALERT_CONFIG){
-				//TODO Increase Alert Threshold
 				if(temp_distance_threshold > min_distance_threshold){
 					temp_distance_threshold--;
 					LCD_SetCursor(1, 0);
-					snprintf(display_buf, sizeof(display_buf), "%d", temp_distance_threshold);
+					snprintf(display_buf, sizeof(display_buf), "%-4d", temp_distance_threshold);
 					LCD_Print(display_buf);
 				}
 			}
 			break;
 
 		case 0x43:	//Play/Pause - Confirm
-			//TODO Confirm Alert Threshold
-			distance_threshold = temp_distance_threshold;
-			current_mode = MODE_LIVE;
+			if(current_mode == MODE_ALERT_CONFIG){
+				distance_threshold = temp_distance_threshold;
+				current_mode = MODE_LIVE;
+			}
 			break;
 
 		default:
@@ -288,7 +282,6 @@ int main(void)
   uint32_t last_hcsr04_tick = 0;
   uint32_t last_dht11_tick = 0;
   uint16_t last_distance = 0;
-//  RingBuffer_t rb;
   RingBuffer_Init(&rb);
 
   char uart_buf[64];
@@ -318,10 +311,9 @@ int main(void)
 		  Handle_IR_Command(&ir_data);
 	  }
 
-	  if(current_mode == MODE_LIVE){
-
-
 	  uint32_t now = HAL_GetTick();
+
+	  if(current_mode == MODE_LIVE){
 
 	  //HCSR04 Data - Read Every 500ms
 	  if(now - last_hcsr04_tick >= 500){
