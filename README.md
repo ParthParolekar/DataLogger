@@ -6,7 +6,7 @@ An embedded data logger built on the STM32 Nucleo G070RB. Reads temperature, hum
 
 ## Demo
 
-[!\[STM32 DataLogger Demo](https://img.youtube.com/vi/VKbnwb2SH60/maxresdefault.jpg)](https://www.youtube.com/watch?v=VKbnwb2SH60)
+[\[W](https://img.youtube.com/vi/VKbnwb2SH60/maxresdefault.jpg)atch Demo on YouTube](https://www.youtube.com/watch?v=VKbnwb2SH60)
 
 > \\\*Click the thumbnail to watch the full demo on YouTube\\\*
 
