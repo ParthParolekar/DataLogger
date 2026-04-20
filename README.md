@@ -6,9 +6,9 @@ An embedded data logger built on the STM32 Nucleo G070RB. Reads temperature, hum
 
 ## Demo
 
-[!\[STM32 DataLogger Demo](https://img.youtube.com/vi/VKbnwb2SH60/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+[!\[STM32 DataLogger Demo](https://img.youtube.com/vi/VKbnwb2SH60/maxresdefault.jpg)](https://www.youtube.com/watch?v=VKbnwb2SH60)
 
-> \*Click the thumbnail to watch the full demo on YouTube\*
+> \\\*Click the thumbnail to watch the full demo on YouTube\\\*
 
 The video covers all three operating modes — LIVE sensor monitoring, PLAYBACK scrolling through stored readings, and ALERT CONFIG with live threshold adjustment and LED alert triggering.
 
@@ -17,13 +17,13 @@ The video covers all three operating modes — LIVE sensor monitoring, PLAYBACK 
 ## Features
 
 * **Live Sensor Monitoring** — Temperature and humidity via DHT11 (every 2s), distance via HC-SR04 (every 500ms), displayed on 16x2 LCD in real time
-* **Ring Buffer Storage** — Circular buffer stores up to 64 `DataPoint\_t` readings with overwrite-on-full behaviour
+* **Ring Buffer Storage** — Circular buffer stores up to 64 `DataPoint\\\_t` readings with overwrite-on-full behaviour
 * **IR Remote Control** — Full system control via VS1838B IR receiver with NEC protocol decoding
 * **3 Operating Modes** — LIVE, PLAYBACK, and ALERT CONFIG switchable via IR remote
 * **Playback Mode** — Scroll through all 64 stored readings using CH+/CH- with wraparound navigation
 * **Configurable Proximity Alert** — Distance threshold adjustable from 2cm to 400cm via IR remote, buzzer triggers when breached
 * **I2C LCD Driver** — Custom bare-metal HD44780 driver over PCF8574 I2C backpack, written from scratch
-* **Non-blocking Architecture** — All timing via `HAL\_GetTick()`, no `HAL\_Delay` in main loop
+* **Non-blocking Architecture** — All timing via `HAL\\\_GetTick()`, no `HAL\\\_Delay` in main loop
 * **UART Streaming** — Human-readable sensor data streamed at 115200 baud for PC monitoring
 
 \---
@@ -97,14 +97,14 @@ The system operates as a state machine with three modes, switchable via IR remot
 ```
 ┌─────────────┐    Button 1 / Button 0     ┌─────────────┐
 │             │ ◄────────────────────────── │             │
-│  MODE\_LIVE  │                             │ MODE\_PLAYBACK│
+│  MODE\\\_LIVE  │                             │ MODE\\\_PLAYBACK│
 │             │ ──────── Button 2 ────────► │             │
 └──────┬──────┘                             └─────────────┘
        │                                          ▲
        │ Button 3                                 │ Play/Pause (confirm)
        ▼                                          │
 ┌─────────────────┐                               │
-│ MODE\_ALERT\_     │ ────────────────────────────► │
+│ MODE\\\_ALERT\\\_     │ ────────────────────────────► │
 │ CONFIG          │
 └─────────────────┘
 ```
@@ -119,15 +119,15 @@ The system operates as a state machine with three modes, switchable via IR remot
 
 ### Ring Buffer
 
-A circular buffer stores up to 64 `DataPoint\_t` structs. When full, the oldest entry is overwritten. Random access by index is supported for playback mode.
+A circular buffer stores up to 64 `DataPoint\\\_t` structs. When full, the oldest entry is overwritten. Random access by index is supported for playback mode.
 
 ```c
 typedef struct {
-    uint8\_t  temperature;   // °C
-    uint8\_t  humidity;      // %
-    uint16\_t distance;      // cm
-    uint32\_t timestamp;     // ms since boot
-} DataPoint\_t;
+    uint8\\\_t  temperature;   // °C
+    uint8\\\_t  humidity;      // %
+    uint16\\\_t distance;      // cm
+    uint32\\\_t timestamp;     // ms since boot
+} DataPoint\\\_t;
 ```
 
 ### IR Remote Button Mapping
@@ -146,16 +146,16 @@ typedef struct {
 
 ### Non-blocking Timing
 
-No `HAL\_Delay` is used in the main loop. All periodic tasks are scheduled using `HAL\_GetTick()` timestamps:
+No `HAL\\\_Delay` is used in the main loop. All periodic tasks are scheduled using `HAL\\\_GetTick()` timestamps:
 
 ```c
-if(now - last\_dht11\_tick >= 2000){   // DHT11 every 2000ms
-    last\_dht11\_tick = now;
+if(now - last\\\_dht11\\\_tick >= 2000){   // DHT11 every 2000ms
+    last\\\_dht11\\\_tick = now;
     // read sensor
 }
 
-if(now - last\_hcsr04\_tick >= 500){   // HC-SR04 every 500ms
-    last\_hcsr04\_tick = now;
+if(now - last\\\_hcsr04\\\_tick >= 500){   // HC-SR04 every 500ms
+    last\\\_hcsr04\\\_tick = now;
     // read sensor
 }
 ```
@@ -170,16 +170,16 @@ DataLogger/
     ├── Inc/
     │   ├── DHT11.h          # DHT11 driver header
     │   ├── HCSR04.h         # HC-SR04 driver header
-    │   ├── ring\_buffer.h    # Ring buffer header
+    │   ├── ring\\\_buffer.h    # Ring buffer header
     │   ├── lcd.h            # LCD I2C driver header
-    │   ├── ir\_remote.h      # IR remote driver header
+    │   ├── ir\\\_remote.h      # IR remote driver header
     │   └── utils.h          # Microsecond delay utility
     └── Src/
         ├── DHT11.c          # Bit-bang DHT11 driver
         ├── HCSR04.c         # HC-SR04 ultrasonic driver
-        ├── ring\_buffer.c    # Circular buffer implementation
+        ├── ring\\\_buffer.c    # Circular buffer implementation
         ├── lcd.c            # HD44780 over PCF8574 I2C driver
-        ├── ir\_remote.c      # NEC IR protocol decoder (EXTI + timer)
+        ├── ir\\\_remote.c      # NEC IR protocol decoder (EXTI + timer)
         ├── utils.c          # Timer-based microsecond delay
         └── main.c           # System state machine and main loop
 
@@ -206,7 +206,7 @@ DataLogger/
 
 ## Key Technical Notes
 
-* **STM32G0 EXTI** uses `HAL\_GPIO\_EXTI\_Falling\_Callback` not `HAL\_GPIO\_EXTI\_Callback` — different from F4/F1 families. This was a major pain point while debugging. The interrupt fired but the callback function failed to run. The relevant registers were seen to be configured correctly as well
+* **STM32G0 EXTI** uses `HAL\\\_GPIO\\\_EXTI\\\_Falling\\\_Callback` not `HAL\\\_GPIO\\\_EXTI\\\_Callback` — different from F4/F1 families. This was a major pain point while debugging. The interrupt fired but the callback function failed to run. The relevant registers were seen to be configured correctly as well
 * **VS1838B** combines the 9ms LOW and 4.5ms HIGH IR leader into a single \~13500µs pulse — the driver detects this directly in the IDLE state
 * **HC-SR04 ECHO** outputs 5V and must be level-shifted before connecting to the STM32 GPIO
 
