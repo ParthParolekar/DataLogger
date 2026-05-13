@@ -61,6 +61,8 @@ void Error_Handler(void);
 #define DHT11_DATA_GPIO_Port GPIOA
 #define HCSR04_TRIG_Pin GPIO_PIN_4
 #define HCSR04_TRIG_GPIO_Port GPIOA
+#define LD4_Pin GPIO_PIN_5
+#define LD4_GPIO_Port GPIOA
 #define HCSR04_ECHO_Pin GPIO_PIN_7
 #define HCSR04_ECHO_GPIO_Port GPIOA
 #define BUZZER_Pin GPIO_PIN_0

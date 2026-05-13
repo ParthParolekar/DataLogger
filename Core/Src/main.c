@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -29,6 +30,11 @@
 #include "lcd.h"
 #include <stdio.h>
 #include <string.h>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
+#include "queue.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -55,12 +61,22 @@ TIM_HandleTypeDef htim17;
 
 UART_HandleTypeDef huart2;
 
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
+};
 /* USER CODE BEGIN PV */
 static SystemMode_t current_mode = MODE_LIVE;
 static uint8_t playback_index = 0;
 static RingBuffer_t rb;
 static uint16_t distance_threshold = 20;
 static uint16_t temp_distance_threshold = 20;
+
+static uint16_t shared_distance = 0;
+static SemaphoreHandle_t distance_mutex;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,12 +87,103 @@ static void MX_TIM14_Init(void);
 static void MX_TIM16_Init(void);
 static void MX_TIM17_Init(void);
 static void MX_USART2_UART_Init(void);
+void StartDefaultTask(void *argument);
+void LED_Blink_Task(void *argument);
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void UART_Print(char *msg);
+void HCSR04_Task(void *argument);
+void DHT11_Task(void *argument);
+
+/* -------------------------------- OS Tasks -------------------------------- */
+void LED_Blink_Task(void *argument){
+	for(;;){
+		HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin);
+		vTaskDelay(pdMS_TO_TICKS(1000));
+	}
+}
+
+void HCSR04_Task(void *argument){
+	HCSR04_Data_t data;
+	HCSR04_Status_t status;
+	TickType_t last_wake_time = xTaskGetTickCount();
+
+	for(;;){
+		status = HCSR04_Read(&data);
+
+		if(status == HCSR04_OK){
+			if(xSemaphoreTake(distance_mutex, pdMS_TO_TICKS(100) == pdTRUE)){
+				shared_distance = data.distance_cm;
+				xSemaphoreGive(distance_mutex);
+			}
+		}
+		vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(500));
+	}
+}
+
+void DHT11_Task(void *argument){
+	DHT11_Data_t dht_data;
+	DHT11_Status_t dht_status;
+//	DataPoint_t dp;
+	uint16_t local_distance;
+	char uart_buf[64];
+	char lcd_buf[32];
+	TickType_t last_wake_time = xTaskGetTickCount();
+
+	for(;;){
+
+		  vTaskSuspendAll();
+		  dht_status = DHT11_ReadData(&dht_data);
+		  xTaskResumeAll();
+
+		  if(dht_status == DHT11_OK){
+
+			  //Grab the latest distance
+			  if(xSemaphoreTake(distance_mutex, pdMS_TO_TICKS(100)) == pdTRUE){
+				  local_distance = shared_distance;
+				  xSemaphoreGive(distance_mutex);
+			  }
+
+			  DataPoint_t dp = {
+					  .distance = local_distance,
+					  .temperature = dht_data.temperature,
+					  .humidity = dht_data.humidity,
+					  .timestamp = xTaskGetTickCount()
+			  };
+
+			  if(local_distance < distance_threshold){
+				  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+			  }else{
+				  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+			  }
+
+			  RingBuffer_Write(&rb, &dp);
+
+			  snprintf(uart_buf, sizeof(uart_buf), "T: %dC, H: %d %%, D: %dcm, @ %lu ms \r\n",
+					  dp.temperature, dp.humidity, dp.distance, dp.timestamp);
+			  UART_Print(uart_buf);
+
+				  LCD_Clear();
+				  snprintf(lcd_buf, sizeof(lcd_buf), "T:%dC H:%d%%",dp.temperature, dp.humidity);
+				  LCD_Print(lcd_buf);
+				  LCD_SetCursor(1, 0);
+				  snprintf(lcd_buf, sizeof(lcd_buf), "D:%dcm @%lus",dp.distance, dp.timestamp/1000);
+				  LCD_Print(lcd_buf);
+
+		  }else{
+			  snprintf(uart_buf, sizeof(uart_buf), "DHT11 Err: %d\r\n", dht_status);
+			  UART_Print(uart_buf);
+		  }
+		  vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(2000));
+	}
+}
+/* ------------------------------ OS Tasks End ------------------------------ */
 
 void UART_Print(char *msg){
 	HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
@@ -296,6 +403,53 @@ int main(void)
   LCD_Print("Waiting...");
 
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+
+  distance_mutex = xSemaphoreCreateMutex();
+
+  xTaskCreate(LED_Blink_Task, "BlinkTask", 128, NULL, 1, NULL);
+  xTaskCreate(HCSR04_Task, "HSCR04Task", 256, NULL, 2, NULL);
+  BaseType_t result = xTaskCreate(DHT11_Task, "DHT11Task", 1024, NULL, 2, NULL);
+  if(result != pdPASS){
+      UART_Print("DHT11 Task creation failed\r\n");
+      Error_Handler();
+  }
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+  /* Start scheduler */
+//  osKernelStart();
+  vTaskStartScheduler();
+
+  /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -629,17 +783,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, DHT11_DATA_Pin|HCSR04_TRIG_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, DHT11_DATA_Pin|HCSR04_TRIG_Pin|LD4_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : DHT11_DATA_Pin */
-  GPIO_InitStruct.Pin = DHT11_DATA_Pin;
+  /*Configure GPIO pins : DHT11_DATA_Pin LD4_Pin */
+  GPIO_InitStruct.Pin = DHT11_DATA_Pin|LD4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DHT11_DATA_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : HCSR04_TRIG_Pin */
   GPIO_InitStruct.Pin = HCSR04_TRIG_Pin;
@@ -668,7 +822,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(IR_INPUT_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
@@ -685,6 +839,46 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 }
 
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void *argument)
+{
+  /* USER CODE BEGIN 5 */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END 5 */
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM1 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM1)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
