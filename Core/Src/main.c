@@ -39,7 +39,10 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+	char line1[22];
+	char line2[22];
+} LCD_Message_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -77,6 +80,13 @@ static uint16_t temp_distance_threshold = 20;
 
 static uint16_t shared_distance = 0;
 static SemaphoreHandle_t distance_mutex;
+
+static TaskHandle_t dht11_task_handle;
+static TaskHandle_t hcsr04_task_handle;
+
+static QueueHandle_t lcd_queue;
+
+static SemaphoreHandle_t ir_semaphore;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,7 +98,6 @@ static void MX_TIM16_Init(void);
 static void MX_TIM17_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *argument);
-void LED_Blink_Task(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -96,10 +105,14 @@ void LED_Blink_Task(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void Handle_IR_Command(IR_Data_t *ir_data);
 
+void LED_Blink_Task(void *argument);
 void UART_Print(char *msg);
 void HCSR04_Task(void *argument);
 void DHT11_Task(void *argument);
+void Display_Task(void *argument);
+void IR_Task(void *argument);
 
 /* -------------------------------- OS Tasks -------------------------------- */
 void LED_Blink_Task(void *argument){
@@ -115,6 +128,11 @@ void HCSR04_Task(void *argument){
 	TickType_t last_wake_time = xTaskGetTickCount();
 
 	for(;;){
+
+        // Reset wake time at start of each iteration
+        // This prevents catch-up after suspension
+        last_wake_time = xTaskGetTickCount();
+
 		status = HCSR04_Read(&data);
 
 		if(status == HCSR04_OK){
@@ -130,13 +148,17 @@ void HCSR04_Task(void *argument){
 void DHT11_Task(void *argument){
 	DHT11_Data_t dht_data;
 	DHT11_Status_t dht_status;
-//	DataPoint_t dp;
 	uint16_t local_distance;
 	char uart_buf[64];
-	char lcd_buf[32];
 	TickType_t last_wake_time = xTaskGetTickCount();
 
+	LCD_Message_t msg;
+
 	for(;;){
+
+          // Reset wake time at start of each iteration
+          // This prevents catch-up after suspension
+          last_wake_time = xTaskGetTickCount();
 
 		  vTaskSuspendAll();
 		  dht_status = DHT11_ReadData(&dht_data);
@@ -169,18 +191,41 @@ void DHT11_Task(void *argument){
 					  dp.temperature, dp.humidity, dp.distance, dp.timestamp);
 			  UART_Print(uart_buf);
 
-				  LCD_Clear();
-				  snprintf(lcd_buf, sizeof(lcd_buf), "T:%dC H:%d%%",dp.temperature, dp.humidity);
-				  LCD_Print(lcd_buf);
-				  LCD_SetCursor(1, 0);
-				  snprintf(lcd_buf, sizeof(lcd_buf), "D:%dcm @%lus",dp.distance, dp.timestamp/1000);
-				  LCD_Print(lcd_buf);
+			  snprintf(msg.line1, sizeof(msg.line1), "T:%dC H:%d%%", dp.temperature, dp.humidity);
+			  snprintf(msg.line2, sizeof(msg.line2), "D:%dcm @%us", dp.distance, (unsigned int)(dp.timestamp/1000));
+
+			  xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 
 		  }else{
 			  snprintf(uart_buf, sizeof(uart_buf), "DHT11 Err: %d\r\n", dht_status);
 			  UART_Print(uart_buf);
 		  }
 		  vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(2000));
+	}
+}
+
+void IR_Task(void *argument){
+	IR_Data_t ir_data;
+
+	for(;;){
+		if(xSemaphoreTake(ir_semaphore, portMAX_DELAY) == pdTRUE){
+			if(IR_Get_Command(&ir_data)){
+				Handle_IR_Command(&ir_data);
+			}
+		}
+	}
+}
+
+void Display_Task(void *argument){
+	LCD_Message_t msg;
+
+	for(;;){
+		if(xQueueReceive(lcd_queue, &msg, portMAX_DELAY) == pdTRUE){
+			LCD_Clear();
+			LCD_Print(msg.line1);
+			LCD_SetCursor(1, 0);
+			LCD_Print(msg.line2);
+		}
 	}
 }
 /* ------------------------------ OS Tasks End ------------------------------ */
@@ -191,63 +236,76 @@ void UART_Print(char *msg){
 
 void Handle_IR_Command(IR_Data_t *ir_data){
 	DataPoint_t display_data;
-	char display_buf[64];
 	uint16_t min_distance_threshold = 2;
 	uint16_t max_distance_threshold = 400;
 	uint8_t data_retrieved;
+	LCD_Message_t msg = {0};
 
 	switch(ir_data->command){
 		case 0x0C:	//1 Live Mode
 			playback_index = 0;
+		    xQueueReset(lcd_queue);  // flush stale messages
+			vTaskResume(dht11_task_handle);
+			vTaskResume(hcsr04_task_handle);
+
 			current_mode = MODE_LIVE;
 			UART_Print("Mode: LIVE\r\n");
 			break;
 
 		case 0x18:	//2 Playback Mode
 			playback_index = 0;
+			vTaskSuspend(dht11_task_handle);
+			vTaskSuspend(hcsr04_task_handle);
+
 			current_mode = MODE_PLAYBACK;
 			UART_Print("Mode: PLAYBACK\r\n");
-			LCD_Clear();
-			LCD_Print("Mode: PLAYBACK");
 
-			HAL_Delay(750);
+			memset(&msg, 0, sizeof(msg));
+			snprintf(msg.line1, sizeof(msg.line1), "Mode: PLAYBACK");
+			xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
+
+			vTaskDelay(pdMS_TO_TICKS(750));
+
 			data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
 			if(data_retrieved){
-				LCD_Clear();
-				snprintf(display_buf, sizeof(display_buf), "[%d], T:%dC, H:%d%%",
-						playback_index, display_data.temperature, display_data.humidity);
-				LCD_Print(display_buf);
-
-				LCD_SetCursor(1, 0);
-
-				snprintf(display_buf, sizeof(display_buf), "D:%dcm, @%lus",
+				memset(&msg, 0, sizeof(msg));
+				snprintf(msg.line1, sizeof(msg.line1), "[%d], T:%dC, H:%d%%",
+										playback_index, display_data.temperature, display_data.humidity);
+				snprintf(msg.line2, sizeof(msg.line2), "D:%dcm, @%lus",
 						display_data.distance, display_data.timestamp/1000);
-				LCD_Print(display_buf);
+				xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 			}
 
 			break;
 
 		case 0x5E:	//3 Alert Config Mode
+			vTaskSuspend(dht11_task_handle);
+			vTaskSuspend(hcsr04_task_handle);
+
 			current_mode = MODE_ALERT_CONFIG;
 			temp_distance_threshold = distance_threshold;
 			UART_Print("Mode: ALERT CONFIG\r\n");
 
-			LCD_Clear();
-			LCD_Print("Mode:");
-			LCD_SetCursor(1, 0);
-			LCD_Print("ALERT_CONFIG");
 
-			HAL_Delay(750);
+			memset(&msg, 0, sizeof(msg));
+			snprintf(msg.line1, sizeof(msg.line1), "Mode:");
+			snprintf(msg.line2, sizeof(msg.line2), "ALERT CONFIG");
+			xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 
-			LCD_Clear();
-			LCD_Print("Dist Threshold");
-			LCD_SetCursor(1, 0);
-			snprintf(display_buf, sizeof(display_buf), "%d", distance_threshold);
-			LCD_Print(display_buf);
+			vTaskDelay(pdMS_TO_TICKS(750));
+
+			memset(&msg, 0, sizeof(msg));
+			snprintf(msg.line1, sizeof(msg.line1), "Dist Threshold");
+			snprintf(msg.line2, sizeof(msg.line2), "%-4d", distance_threshold);
+			xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 			break;
 
 		case 0x16:	//0 Home
 			playback_index = 0;
+		    xQueueReset(lcd_queue);  // flush stale messages
+			vTaskResume(dht11_task_handle);
+			vTaskResume(hcsr04_task_handle);
+
 			current_mode = MODE_LIVE;
 			UART_Print("Mode: LIVE\r\n");
 			break;
@@ -263,16 +321,13 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 
 				data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
 				if(data_retrieved){
-					LCD_Clear();
-					snprintf(display_buf, sizeof(display_buf), "[%d], T:%dC, H:%d%%",
+
+					memset(&msg, 0, sizeof(msg));
+					snprintf(msg.line1, sizeof(msg.line1), "[%d], T:%dC, H:%d%%",
 							playback_index, display_data.temperature, display_data.humidity);
-					LCD_Print(display_buf);
-
-					LCD_SetCursor(1, 0);
-
-					snprintf(display_buf, sizeof(display_buf), "D:%dcm, @%lus",
+					snprintf(msg.line2, sizeof(msg.line2), "D:%dcm, @%lus",
 							display_data.distance, display_data.timestamp/1000);
-					LCD_Print(display_buf);
+					xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 					}
 			}
 			break;
@@ -288,16 +343,12 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 
 				data_retrieved = RingBuffer_Read(&rb, playback_index, &display_data);
 				if(data_retrieved){
-					LCD_Clear();
-					snprintf(display_buf, sizeof(display_buf), "[%d], T:%dC, H:%d%%",
+					memset(&msg, 0, sizeof(msg));
+					snprintf(msg.line1, sizeof(msg.line1), "[%d], T:%dC, H:%d%%",
 							playback_index, display_data.temperature, display_data.humidity);
-					LCD_Print(display_buf);
-
-					LCD_SetCursor(1, 0);
-
-					snprintf(display_buf, sizeof(display_buf), "D:%dcm, @%lus",
+					snprintf(msg.line2, sizeof(msg.line2), "D:%dcm, @%lus",
 							display_data.distance, display_data.timestamp/1000);
-					LCD_Print(display_buf);
+					xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 					}
 			}
 			break;
@@ -306,9 +357,11 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 			if(current_mode == MODE_ALERT_CONFIG){
 				if(temp_distance_threshold < max_distance_threshold){
 					temp_distance_threshold++;
-					LCD_SetCursor(1, 0);
-					snprintf(display_buf, sizeof(display_buf), "%-4d", temp_distance_threshold);
-					LCD_Print(display_buf);
+
+					memset(&msg, 0, sizeof(msg));
+					snprintf(msg.line1, sizeof(msg.line1), "Dist Threshold");
+					snprintf(msg.line2, sizeof(msg.line2), "%-4d", temp_distance_threshold);
+					xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 				}
 			}
 			break;
@@ -317,9 +370,11 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 			if(current_mode == MODE_ALERT_CONFIG){
 				if(temp_distance_threshold > min_distance_threshold){
 					temp_distance_threshold--;
-					LCD_SetCursor(1, 0);
-					snprintf(display_buf, sizeof(display_buf), "%-4d", temp_distance_threshold);
-					LCD_Print(display_buf);
+
+					memset(&msg, 0, sizeof(msg));
+					snprintf(msg.line1, sizeof(msg.line1), "Dist Threshold");
+					snprintf(msg.line2, sizeof(msg.line2), "%-4d", temp_distance_threshold);
+					xQueueSend(lcd_queue, &msg, pdMS_TO_TICKS(100));
 				}
 			}
 			break;
@@ -327,6 +382,9 @@ void Handle_IR_Command(IR_Data_t *ir_data){
 		case 0x43:	//Play/Pause - Confirm
 			if(current_mode == MODE_ALERT_CONFIG){
 				distance_threshold = temp_distance_threshold;
+		        xQueueReset(lcd_queue);
+		        vTaskResume(dht11_task_handle);
+		        vTaskResume(hcsr04_task_handle);
 				current_mode = MODE_LIVE;
 			}
 			break;
@@ -378,21 +436,8 @@ int main(void)
   HCSR04_Init(&htim16);
   IR_Init(&htim17);
 
-  DHT11_Data_t dht_data;
-  DHT11_Status_t dht_status;
 
-  HCSR04_Data_t hcsr04_data;
-  HCSR04_Status_t hcsr04_status;
-
-  IR_Data_t ir_data;
-
-  uint32_t last_hcsr04_tick = 0;
-  uint32_t last_dht11_tick = 0;
-  uint16_t last_distance = 0;
   RingBuffer_Init(&rb);
-
-  char uart_buf[64];
-  char lcd_buf[64];
   __HAL_TIM_SET_COUNTER(&htim14, 0);
   delay_us(100);
 
@@ -425,20 +470,26 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+//  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
 
   distance_mutex = xSemaphoreCreateMutex();
 
+  lcd_queue = xQueueCreate(5, sizeof(LCD_Message_t));
+
   xTaskCreate(LED_Blink_Task, "BlinkTask", 128, NULL, 1, NULL);
-  xTaskCreate(HCSR04_Task, "HSCR04Task", 256, NULL, 2, NULL);
-  BaseType_t result = xTaskCreate(DHT11_Task, "DHT11Task", 1024, NULL, 2, NULL);
+  xTaskCreate(Display_Task, "DisplayTask", 512, NULL, 1, NULL);
+  xTaskCreate(HCSR04_Task, "HSCR04Task", 256, NULL, 2, &hcsr04_task_handle);
+  BaseType_t result = xTaskCreate(DHT11_Task, "DHT11Task", 1024, NULL, 2, &dht11_task_handle);
   if(result != pdPASS){
       UART_Print("DHT11 Task creation failed\r\n");
       Error_Handler();
   }
+
+  ir_semaphore = xSemaphoreCreateBinary();
+  xTaskCreate(IR_Task, "IR Task", 512, NULL, 3, NULL);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -446,7 +497,6 @@ int main(void)
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
-//  osKernelStart();
   vTaskStartScheduler();
 
   /* We should never get here as control is now taken by the scheduler */
@@ -459,73 +509,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-
-	  if(IR_Get_Command(&ir_data)){
-		  Handle_IR_Command(&ir_data);
-	  }
-
-	  uint32_t now = HAL_GetTick();
-
-	  if(current_mode == MODE_LIVE){
-
-	  //HCSR04 Data - Read Every 500ms
-	  if(now - last_hcsr04_tick >= 500){
-
-		  last_hcsr04_tick = now;
-
-		  hcsr04_status = HCSR04_Read(&hcsr04_data);
-
-		  if(hcsr04_status == HCSR04_OK){
-			  last_distance = hcsr04_data.distance_cm;
-		  }else{
-			  snprintf(uart_buf, sizeof(uart_buf), "HCSR04 Err: %d\r\n", hcsr04_status);
-			  UART_Print(uart_buf);
-		  }
-	  }
-
-	  if(now - last_dht11_tick >= 2000){
-
-		  last_dht11_tick = now;
-
-		  dht_status = DHT11_ReadData(&dht_data);
-
-		  if(dht_status == DHT11_OK){
-
-			  DataPoint_t dp = {
-					  .distance = last_distance,
-					  .temperature = dht_data.temperature,
-					  .humidity = dht_data.humidity,
-					  .timestamp = now
-			  };
-
-			  if(last_distance < distance_threshold){
-				  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
-			  }else{
-				  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
-			  }
-
-			  RingBuffer_Write(&rb, &dp);
-
-			  snprintf(uart_buf, sizeof(uart_buf), "T: %dC, H: %d %%, D: %dcm, @ %lu ms \r\n",
-					  dp.temperature, dp.humidity, dp.distance, dp.timestamp);
-			  UART_Print(uart_buf);
-
-				  LCD_Clear();
-				  snprintf(lcd_buf, sizeof(lcd_buf), "T:%dC H:%d%%",dp.temperature, dp.humidity);
-				  LCD_Print(lcd_buf);
-				  LCD_SetCursor(1, 0);
-				  snprintf(lcd_buf, sizeof(lcd_buf), "D:%dcm @%lus",dp.distance, dp.timestamp/1000);
-				  LCD_Print(lcd_buf);
-
-		  }else{
-			  snprintf(uart_buf, sizeof(uart_buf), "DHT11 Err: %d\r\n", dht_status);
-			  UART_Print(uart_buf);
-		  }
-
-
-	  }
-	  }
   }
   /* USER CODE END 3 */
 }
@@ -834,7 +817,13 @@ static void MX_GPIO_Init(void)
 
 void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
 	  if(GPIO_Pin == IR_INPUT_Pin){
+		  UBaseType_t uxSavedInterruptStatus = taskENTER_CRITICAL_FROM_ISR();
 		  IR_EXTI_Callback();
+		  taskEXIT_CRITICAL_FROM_ISR(uxSavedInterruptStatus);
+
+		  BaseType_t higher_priority_task_woken = pdFALSE;
+		  xSemaphoreGiveFromISR(ir_semaphore, &higher_priority_task_woken);
+		  portYIELD_FROM_ISR(higher_priority_task_woken);
 	  }
 }
 
@@ -847,16 +836,7 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void *argument)
-{
-  /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END 5 */
-}
+
 
 /**
   * @brief  Period elapsed callback in non blocking mode
